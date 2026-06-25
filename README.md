@@ -616,4 +616,4 @@ cat training/exercises/exercise-1.md
 
 **Last Updated:** June 2024  
 **Version:** 1.0.0  
-**Maintainer:** DeepTrustxAI Pvt Ltd
+**Maintainer:** Arpit K
