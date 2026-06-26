@@ -1,0 +1,284 @@
+version: '3.8'
+
+services:
+  # MASTER PLC
+  master-plc:
+    build:
+      context: ./master-plc
+      dockerfile: Dockerfile
+    container_name: railroad-master-plc
+    hostname: master-plc
+    networks:
+      ot-network:
+        ipv4_address: 172.25.0.10
+    ports:
+      - "5020:502"
+    volumes:
+      - ./master-plc:/app
+      - master-plc-data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLC_ROLE=master
+      - LISTEN_IP=0.0.0.0
+      - LISTEN_PORT=502
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # SLAVE PLC 1
+  slave-plc-1:
+    build:
+      context: ./slave-plc
+      dockerfile: Dockerfile
+    container_name: railroad-slave-plc-1
+    hostname: slave-plc-1
+    networks:
+      ot-network:
+        ipv4_address: 172.25.1.10
+    ports:
+      - "5021:502"
+    volumes:
+      - ./slave-plc:/app
+      - ./slave-plc/config:/app/config
+      - slave-plc-1-data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLC_ROLE=slave
+      - SLAVE_ID=1
+      - SEGMENT_NAME=North
+      - LISTEN_PORT=502
+      - MASTER_IP=172.25.0.10
+      - MASTER_PORT=502
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    depends_on:
+      - master-plc
+
+  # SLAVE PLC 2
+  slave-plc-2:
+    build:
+      context: ./slave-plc
+      dockerfile: Dockerfile
+    container_name: railroad-slave-plc-2
+    hostname: slave-plc-2
+    networks:
+      ot-network:
+        ipv4_address: 172.25.2.10
+    ports:
+      - "5022:502"
+    volumes:
+      - ./slave-plc:/app
+      - ./slave-plc/config:/app/config
+      - slave-plc-2-data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLC_ROLE=slave
+      - SLAVE_ID=2
+      - SEGMENT_NAME=Central
+      - LISTEN_PORT=502
+      - MASTER_IP=172.25.0.10
+      - MASTER_PORT=502
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    depends_on:
+      - master-plc
+
+  # SLAVE PLC 3
+  slave-plc-3:
+    build:
+      context: ./slave-plc
+      dockerfile: Dockerfile
+    container_name: railroad-slave-plc-3
+    hostname: slave-plc-3
+    networks:
+      ot-network:
+        ipv4_address: 172.25.3.10
+    ports:
+      - "5023:502"
+    volumes:
+      - ./slave-plc:/app
+      - ./slave-plc/config:/app/config
+      - slave-plc-3-data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLC_ROLE=slave
+      - SLAVE_ID=3
+      - SEGMENT_NAME=South
+      - LISTEN_PORT=502
+      - MASTER_IP=172.25.0.10
+      - MASTER_PORT=502
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    depends_on:
+      - master-plc
+
+  # SCADA SERVER
+  scada:
+    build:
+      context: ./scada
+      dockerfile: Dockerfile
+    container_name: railroad-scada
+    hostname: scada
+    networks:
+      dmz-network:
+        ipv4_address: 172.27.0.20
+      ot-network:
+        ipv4_address: 172.25.0.20
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./scada:/app
+      - scada-data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MASTER_PLC_IP=172.25.0.10
+      - MASTER_PLC_PORT=502
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - master-plc
+
+  # ELASTICSEARCH
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.0.0
+    container_name: railroad-elasticsearch
+    hostname: elasticsearch
+    networks:
+      ot-network:
+        ipv4_address: 172.25.0.50
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - ./monitoring/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    healthcheck:
+      test: curl -s http://localhost:9200 >/dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # KIBANA
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.0.0
+    container_name: railroad-kibana
+    hostname: kibana
+    networks:
+      ot-network:
+        ipv4_address: 172.25.0.51
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=changeme
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+    healthcheck:
+      test: curl -s http://localhost:5601/api/status >/dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # LOGSTASH
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.0.0
+    container_name: railroad-logstash
+    hostname: logstash
+    networks:
+      ot-network:
+        ipv4_address: 172.25.0.52
+    ports:
+      - "5000:5000/tcp"
+      - "5001:5001/udp"
+      - "9600:9600"
+    volumes:
+      - ./monitoring/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    environment:
+      - ELASTICSEARCH_HOSTS=elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
+  # ZEEK IDS
+  zeek:
+    image: zeek/zeek:latest
+    container_name: railroad-zeek
+    hostname: zeek
+    networks:
+      ot-network:
+        ipv4_address: 172.25.0.30
+    ports:
+      - "5901:5901"
+    volumes:
+      - ./monitoring/zeek-rules.sig:/opt/zeek/etc/site.sig
+      - zeek-logs:/zeek/logs
+    environment:
+      - ZEEK_INSTALL_DIR=/opt/zeek
+    restart: unless-stopped
+
+  # SYSLOG COLLECTOR
+  collector:
+    build:
+      context: ./monitoring
+      dockerfile: Dockerfile.collector
+    container_name: railroad-collector
+    hostname: collector
+    networks:
+      ot-network:
+        ipv4_address: 172.25.0.40
+    ports:
+      - "514:514/udp"
+      - "5000:5000/tcp"
+    volumes:
+      - ./monitoring:/app
+      - collector-logs:/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SYSLOG_PORT=514
+      - LISTEN_IP=0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  master-plc-data:
+  slave-plc-1-data:
+  slave-plc-2-data:
+  slave-plc-3-data:
+  scada-data:
+  elasticsearch-data:
+  zeek-logs:
+  collector-logs:
+
+networks:
+  ot-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+  
+  dmz-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.27.0.0/16
+  
+  it-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.26.0.0/16
